@@ -6,6 +6,9 @@ import edu.coursera.concurrent.boruvka.Edge;
 import edu.coursera.concurrent.boruvka.Component;
 
 import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.List;
 import java.util.ArrayList;
 
@@ -14,12 +17,28 @@ import java.util.ArrayList;
  * Spanning Tree.
  */
 public final class ParBoruvka extends AbstractBoruvka<ParBoruvka.ParComponent> {
+    private final Lock[] locks;
 
     /**
-     * Constructor.
+     * Main constructor.
+     * 
+     * @param locksCount
+     */
+    public ParBoruvka(final int locksCount) {
+        super();
+        
+        this.locks = new Lock[locksCount];
+        
+        for (int i = 0; i < locksCount; i++) {
+            this.locks[i] = new ReentrantLock();
+        }
+    }
+
+    /**
+     * Empty constructor.
      */
     public ParBoruvka() {
-        super();
+        this(128);
     }
 
     /**
@@ -28,7 +47,46 @@ public final class ParBoruvka extends AbstractBoruvka<ParBoruvka.ParComponent> {
     @Override
     public void computeBoruvka(final Queue<ParComponent> nodesLoaded,
             final SolutionToBoruvka<ParComponent> solution) {
-        throw new UnsupportedOperationException();
+        ParComponent loopNode = null;
+
+        while (!nodesLoaded.isEmpty()) {
+            loopNode = nodesLoaded.poll();
+
+            if (loopNode == null || !this.lockForComponent(loopNode).tryLock()) {
+                continue;
+            }
+
+            if (loopNode.isDead) {
+                this.lockForComponent(loopNode).unlock();
+                continue;
+            }
+
+            final Edge<ParComponent> e = loopNode.getMinEdge();
+
+            if (e == null) {
+                this.lockForComponent(loopNode).unlock();
+                solution.setSolution(loopNode);
+                break;
+            }
+
+            final ParComponent other = e.getOther(loopNode);
+
+            if (!this.lockForComponent(other).tryLock()) {
+                this.lockForComponent(loopNode).unlock();
+                nodesLoaded.add(loopNode);
+                continue;
+            }
+
+            other.isDead = true;
+            loopNode.merge(other, e.weight());
+            this.lockForComponent(loopNode).unlock();
+            this.lockForComponent(other).unlock();
+            nodesLoaded.add(loopNode);
+        }
+    }
+
+    private Lock lockForComponent(final ParComponent component) {
+        return this.locks[component.nodeId % this.locks.length];
     }
 
     /**
